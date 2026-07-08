@@ -348,8 +348,9 @@ WAJIB kembalikan output dalam format JSON mentah (tanpa pembungkus markdown):
 }"""
 
 
-def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full_pages=2, max_retries=5, initial_delay=25):
-    """Kirim gambar ke Groq API dengan deskripsi struktur dinamis."""
+def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full_pages=2,
+                      max_retries=5, initial_delay=25, target_site_id="", target_nama=""):
+    """Kirim gambar ke Groq API dengan deskripsi struktur dinamis + konteks target."""
     content = []
     for img_b64 in image_base64_list:
         content.append({
@@ -359,6 +360,21 @@ def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full
 
     num_imgs = len(image_base64_list)
     num_strips = num_imgs - num_full_pages  # biasanya 3
+
+    # ── Injeksi Konteks Target ──
+    # Mencegah AI salah membaca header proyek (misal "2024 SL BAKTI") sebagai site_id/nama_lokasi
+    target_context = ""
+    if target_site_id or target_nama:
+        target_context = (
+            f"🎯 KONTEKS TARGET — Dokumen ini untuk site berikut:\n"
+            f"   SITE ID TARGET    : {target_site_id}\n"
+            f"   NAMA LOKASI TARGET: {target_nama}\n"
+            f"   ⚠️ PENTING: Gunakan nilai di atas sebagai site_id dan nama_lokasi dalam JSON output.\n"
+            f"   Jangan keliru dengan label proyek (misal '2024 SL BAKTI') yang ada di header PDF.\n"
+            f"   Untuk field 'nama_site_cocok_*', bandingkan nama site yang TERBACA di gambar\n"
+            f"   dengan NAMA LOKASI TARGET di atas ('{target_nama}').\n"
+            f"\n{'=' * 50}\n\n"
+        )
 
     structure_desc = f"🚨 STRUKTUR GAMBAR — Total {num_imgs} gambar:\n"
 
@@ -392,7 +408,7 @@ def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full
         )
 
     structure_desc += "\n" + "=" * 50 + "\n\n"
-    full_prompt = structure_desc + ANALYSIS_PROMPT
+    full_prompt = target_context + structure_desc + ANALYSIS_PROMPT
 
     content.append({"type": "text", "text": full_prompt})
 
@@ -459,7 +475,7 @@ def _bool(val):
 
 
 def apply_business_rules(result, file_name="", kolom_lengkap=True, kolom_kosong_list=None,
-                         kolom_ad_ah=None, target_nama=""):
+                         kolom_ad_ah=None, target_nama="", target_site_id=""):
     """Terapkan 6 kriteria validasi. Returns result dict with updated status & notes."""
     if not result:
         return result
@@ -468,6 +484,19 @@ def apply_business_rules(result, file_name="", kolom_lengkap=True, kolom_kosong_
         kolom_kosong_list = []
     if kolom_ad_ah is None:
         kolom_ad_ah = {}
+
+    # ── Override site_id dan nama_lokasi dari AI dengan data target yang diketahui ──
+    # AI sering salah membaca header proyek (misal "2024 SL BAKTI") sebagai site_id/nama_lokasi
+    if target_site_id:
+        ai_site_id = result.get("site_id", "")
+        if ai_site_id and clean_site_id(ai_site_id) != clean_site_id(target_site_id):
+            print(f"    [🔄] Override site_id: AI='{ai_site_id}' → Target='{target_site_id}'")
+        result["site_id"] = target_site_id
+    if target_nama:
+        ai_nama = result.get("nama_lokasi", "")
+        if ai_nama and clean_site_id(ai_nama) != clean_site_id(target_nama):
+            print(f"    [🔄] Override nama_lokasi: AI='{ai_nama}' → Target='{target_nama}'")
+        result["nama_lokasi"] = target_nama
 
     fail_reasons = []
     notes = []
@@ -841,11 +870,13 @@ def run_dry_run():
                 img_b64s = [img['base64'] for img in image_files]
                 created_time = image_files[0].get('created', '') if image_files else ''
                 result = analyze_with_groq(img_b64s, api_key_active, layout_type="single",
-                                           num_full_pages=len(img_b64s), max_retries=5)
+                                           num_full_pages=len(img_b64s), max_retries=5,
+                                           target_site_id=site_id_in, target_nama=target_nama)
                 if result:
                     result = apply_business_rules(result, file_name=image_files[0].get('name', ''),
                                                   kolom_lengkap=kolom_lengkap, kolom_kosong_list=kolom_kosong_list,
-                                                  kolom_ad_ah=kolom_ad_ah, target_nama=target_nama)
+                                                  kolom_ad_ah=kolom_ad_ah, target_nama=target_nama,
+                                                  target_site_id=site_id_in)
                     # Override: gambar terpisah selalu FAIL
                     result["status_check"] = "TIDAK SESUAI"
                     result["_fail_reasons"] = result.get("_fail_reasons", []) + ["File berupa gambar terpisah, bukan 1 PDF"]
@@ -873,12 +904,14 @@ def run_dry_run():
             print(f"    [📄] Total gambar: {len(pdf_pages)} ({num_full_pages} halaman + {len(pdf_pages)-num_full_pages} strips)")
 
             result = analyze_with_groq(pdf_pages, api_key_active, layout_type=detected_layout,
-                                        num_full_pages=num_full_pages)
+                                        num_full_pages=num_full_pages,
+                                        target_site_id=site_id_in, target_nama=target_nama)
 
             if result:
                 result = apply_business_rules(result, file_name=file_name,
                                               kolom_lengkap=kolom_lengkap, kolom_kosong_list=kolom_kosong_list,
-                                              kolom_ad_ah=kolom_ad_ah, target_nama=target_nama)
+                                              kolom_ad_ah=kolom_ad_ah, target_nama=target_nama,
+                                              target_site_id=site_id_in)
 
                 status_check = result.get("status_check", "TIDAK SESUAI")
                 status_am = "OK" if status_check == "SESUAI" else "NOK"
@@ -912,6 +945,23 @@ def run_dry_run():
         if processed_count < total_targets:
             print(f"    [⏳] Delay {sleep_time}s...")
             time.sleep(sleep_time)
+
+    # ── CEK TARGET SITE YANG TIDAK DITEMUKAN ──
+    processed_site_ids = {clean_site_id(r.get("Site ID", "")) for r in results_list if r.get("Site ID")}
+    missing_sites = []
+    for tgt_no, tgt_info in TARGET_SITES.items():
+        tgt_clean = clean_site_id(tgt_info["site_id"])
+        if tgt_clean not in processed_site_ids:
+            missing_sites.append(tgt_info)
+
+    if missing_sites:
+        print(f"\n{'=' * 70}")
+        print(f"  ⚠️ TARGET SITE TIDAK DITEMUKAN DI SPREADSHEET INPUT")
+        print(f"{'=' * 70}")
+        for ms in missing_sites:
+            print(f"  ❓ {ms['site_id']} — {ms['nama']}")
+        print(f"  ℹ️ Kemungkinan: Site ID tidak ada di spreadsheet input, atau format berbeda.")
+        print(f"{'─' * 70}")
 
     # ── RINGKASAN AKHIR ──
     if results_list:
