@@ -947,43 +947,17 @@ def run_dry_run():
             file_name, file_content, created_time, pdf_count = get_pdf_from_folder(drive_service, folder_id)
 
             if not file_content:
-                print(f"    [⚠️] PDF tidak ditemukan. Cari gambar...")
+                print(f"    [⚠️] PDF tidak ditemukan. Memeriksa keberadaan gambar terpisah...")
                 image_files = get_images_from_folder(drive_service, folder_id, max_width=MAX_IMAGE_WIDTH)
-                if not image_files:
+                
+                if image_files:
+                    print("    [⚠️] Folder hanya berisi file gambar terpisah, bukan PDF. Otomatis FAIL (NOK). Skip API Groq.")
+                    results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "TIDAK SESUAI", "Laporan berupa file gambar terpisah, bukan PDF"))
+                    queue_writeback("NOK", "[FAIL: Laporan berupa file gambar terpisah, bukan PDF]")
+                else:
+                    print("    [⚠️] Folder GDrive kosong (tidak ada file PDF atau gambar). Otomatis FAIL (NOK). Skip API Groq.")
                     results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "TIDAK SESUAI", "Tidak ada file di folder GDrive"))
                     queue_writeback("NOK", "[FAIL: Tidak ada file di folder GDrive]")
-                    continue
-
-                img_b64s = [img['base64'] for img in image_files]
-                created_time = image_files[0].get('created', '') if image_files else ''
-                result = analyze_with_groq(img_b64s, api_key_active, layout_type="single",
-                                           num_full_pages=len(img_b64s), max_retries=5,
-                                           target_site_id=site_id_in, target_nama=target_nama)
-                if result:
-                    result = apply_business_rules(result, file_name=image_files[0].get('name', ''),
-                                                  kolom_lengkap=kolom_lengkap, kolom_kosong_list=kolom_kosong_list,
-                                                  kolom_ad_ah=kolom_ad_ah, target_nama=target_nama,
-                                                  target_site_id=site_id_in)
-                    # Override: gambar terpisah selalu FAIL
-                    result["status_check"] = "TIDAK SESUAI"
-                    result["_fail_reasons"] = result.get("_fail_reasons", []) + ["File berupa gambar terpisah, bukan 1 PDF"]
-
-                    status_am = "NOK"
-                    fail_notes = f"[FAIL: {', '.join(result.get('_fail_reasons', []))}]"
-                    ai_msg = result.get("catatan_ai", "")
-                    if ai_msg and ai_msg != "-":
-                        fail_notes += f" {ai_msg}"
-
-                    tanggal_submit = created_time[:10] if created_time else "-"
-                    if tanggal_submit != "-" and "-" in tanggal_submit:
-                        parts = tanggal_submit.split("-")
-                        tanggal_submit = f"{parts[2]}-{parts[1]}-{parts[0]}"
-                    print_result(result, file_name=image_files[0].get('name', ''))
-                    results_list.append(parse_to_output_dict(no_val, idx_in, site_id_in, result, tanggal_submit, kolom_lengkap, kolom_kosong_list))
-                    queue_writeback(status_am, fail_notes)
-                else:
-                    results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "ERROR", "Groq API gagal"))
-                    queue_writeback("NOK", "[ERROR: Groq API gagal menganalisis gambar]")
                 continue
 
             print(f"    [📄] PDF: '{file_name}' ({pdf_count} file)")
