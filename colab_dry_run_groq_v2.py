@@ -210,75 +210,158 @@ def create_scan_strips(page_pil_img):
 
 
 def parse_pdf_layout_deterministically(pdf_bytes):
-    """Menganalisis PDF menggunakan pypdf secara deterministik."""
+    """Menganalisis PDF menggunakan pypdf secara deterministik.
+    Mengembalikan: (before_idx, after_idx, traffic_idx, layout_type)
+    - layout_type: 'stacked' (Before+After di 1 halaman) atau 'single' (terpisah)
+    """
     try:
         import pypdf
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         num_pages = len(reader.pages)
         before_idx = None
         after_idx = None
+        traffic_idx = None
         layout_type = "single"
 
+        # Scan setiap halaman untuk keyword, prioritaskan halaman awal
+        page_texts = []
         for idx in range(num_pages):
             text = (reader.pages[idx].extract_text() or "").strip().upper()
-            if "BEFORE" in text and "AFTER" in text:
+            page_texts.append(text)
+
+        # Pass 1: Cari halaman yang mengandung BOTH "BEFORE" dan "AFTER" (stacked layout)
+        for idx, text in enumerate(page_texts):
+            # Hanya cari di halaman 1-2 (indeks 0-1), bukan halaman belakang
+            if idx <= 1 and "BEFORE" in text and "AFTER" in text:
+                before_idx = idx
                 after_idx = idx
                 layout_type = "stacked"
-                return after_idx, layout_type
-            elif "BEFORE" in text:
-                before_idx = idx
-            elif "AFTER" in text:
-                after_idx = idx
+                break
 
-        if after_idx is None:
-            if num_pages == 2:
+        # Pass 2: Jika belum ketemu stacked, cari halaman terpisah
+        if layout_type != "stacked":
+            for idx, text in enumerate(page_texts):
+                if "BEFORE" in text and before_idx is None:
+                    before_idx = idx
+                elif "AFTER" in text and after_idx is None:
+                    after_idx = idx
+
+        # Pass 3: Cari halaman traffic (mengandung "AP1" atau "TRAFFIC" atau "INBOUND")
+        for idx, text in enumerate(page_texts):
+            if idx != before_idx and idx != after_idx:
+                if any(kw in text for kw in ["AP1", "TRAFFIC", "INBOUND", "MONITORING"]):
+                    traffic_idx = idx
+                    break
+
+        # Fallback jika keyword tidak ditemukan
+        if before_idx is None and after_idx is None:
+            if num_pages == 1:
+                before_idx = 0
                 after_idx = 0
                 layout_type = "stacked"
+            elif num_pages == 2:
+                before_idx = 0
+                after_idx = 0
+                layout_type = "stacked"
+                traffic_idx = 1
             elif num_pages == 3:
+                before_idx = 0
                 after_idx = 1
+                traffic_idx = 2
                 layout_type = "single"
-            else:
-                after_idx = 1 if num_pages > 1 else 0
+            else:  # 4+ halaman
+                before_idx = 0
+                after_idx = 1
+                traffic_idx = num_pages - 1  # Halaman terakhir biasanya traffic
                 layout_type = "single"
+        elif after_idx is None:
+            # Before ditemukan tapi After tidak
+            after_idx = before_idx + 1 if before_idx + 1 < num_pages else before_idx
+            if after_idx == before_idx:
+                layout_type = "stacked"
 
-        return after_idx, layout_type
+        # Traffic fallback: halaman terakhir jika belum ditemukan
+        if traffic_idx is None:
+            last_page = num_pages - 1
+            if last_page != before_idx and last_page != after_idx:
+                traffic_idx = last_page
+            elif num_pages > 2:
+                traffic_idx = num_pages - 1
+
+        return before_idx, after_idx, traffic_idx, layout_type
     except Exception:
-        return 0, "stacked"
+        return 0, 0, None, "stacked"
+
+
+def _encode_pil_image(pil_img, max_width=1280):
+    """Helper: encode PIL image ke base64 string dengan resize."""
+    from PIL import Image
+    if pil_img.width > max_width:
+        ratio = max_width / pil_img.width
+        pil_img = pil_img.resize((max_width, int(pil_img.height * ratio)), Image.LANCZOS)
+    buffer = io.BytesIO()
+    pil_img.save(buffer, format="PNG", optimize=True)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 def pdf_to_images(pdf_bytes, max_width=1280):
     """Konversi PDF ke list gambar base64 + 3 scan strips dari halaman After.
-    DPI=300. Returns: (list_base64, layout_type)
+    DPI=300.
+    Untuk PDF >3 halaman: hanya kirim 3 halaman terpenting (Before, After, Traffic)
+    + 3 scan strips = MAKSIMAL 6 gambar agar tidak melebihi batas Groq API.
+    Returns: (list_base64, layout_type, num_full_pages)
     """
     from pdf2image import convert_from_bytes
     from PIL import Image
 
     images = convert_from_bytes(pdf_bytes, dpi=300)
-    encoded_images = []
+    total_pdf_pages = len(images)
 
-    for idx, img in enumerate(images):
-        img_full = img.copy()
-        if img_full.width > max_width:
-            ratio = max_width / img_full.width
-            img_full = img_full.resize((max_width, int(img_full.height * ratio)), Image.LANCZOS)
-        buffer = io.BytesIO()
-        img_full.save(buffer, format="PNG", optimize=True)
-        encoded_images.append(base64.b64encode(buffer.getvalue()).decode("utf-8"))
+    before_idx, after_idx, traffic_idx, layout_type = parse_pdf_layout_deterministically(pdf_bytes)
 
-    num_full_pages = len(encoded_images)
-    layout_type = "unknown"
+    print(f"    [🔍] PDF {total_pdf_pages} halaman | Before: hal.{before_idx+1} | After: hal.{after_idx+1} | "
+          f"Traffic: {'hal.'+str(traffic_idx+1) if traffic_idx is not None else 'N/A'} | Layout: {layout_type}")
+    print(f"    [🔍] Resolusi PDF: {images[after_idx].width}x{images[after_idx].height}px (DPI=300)")
 
-    if len(images) > 0:
-        after_idx, layout_type = parse_pdf_layout_deterministically(pdf_bytes)
-        print(f"    [🔍] Halaman After: indeks {after_idx} | Layout: {layout_type}")
-        print(f"    [🔍] Resolusi PDF: {images[after_idx].width}x{images[after_idx].height}px (DPI=300)")
+    # Untuk PDF ≤3 halaman: kirim semua halaman
+    # Untuk PDF >3 halaman: hanya kirim Before, After, Traffic (max 3 halaman)
+    if total_pdf_pages <= 3:
+        encoded_images = [_encode_pil_image(img, max_width) for img in images]
+        num_full_pages = len(encoded_images)
+        print(f"    [📄] Mengirim semua {num_full_pages} halaman")
+    else:
+        # Pilih hanya halaman terpenting
+        selected_indices = []
+        selected_labels = []
 
-        try:
-            strips = create_scan_strips(images[after_idx])
-            encoded_images.extend(strips)
-            print(f"    [🔍] +3 scan strips tumpang tindih (0-45%, 30-75%, 55-100%) dari halaman {after_idx+1}")
-        except Exception as e:
-            print(f"    [⚠️] Gagal membuat scan strips: {e}")
+        if layout_type == "stacked":
+            # Before+After di 1 halaman
+            selected_indices.append(after_idx)
+            selected_labels.append(f"Before+After (hal.{after_idx+1})")
+        else:
+            # Before dan After terpisah
+            if before_idx is not None:
+                selected_indices.append(before_idx)
+                selected_labels.append(f"Before (hal.{before_idx+1})")
+            if after_idx is not None and after_idx not in selected_indices:
+                selected_indices.append(after_idx)
+                selected_labels.append(f"After (hal.{after_idx+1})")
+
+        if traffic_idx is not None and traffic_idx not in selected_indices:
+            selected_indices.append(traffic_idx)
+            selected_labels.append(f"Traffic (hal.{traffic_idx+1})")
+
+        encoded_images = [_encode_pil_image(images[i], max_width) for i in selected_indices]
+        num_full_pages = len(encoded_images)
+        print(f"    [📄] PDF >3 halaman → seleksi {num_full_pages} halaman terpenting: {', '.join(selected_labels)}")
+
+    # Tambahkan 3 scan strips dari halaman After
+    try:
+        strips = create_scan_strips(images[after_idx])
+        encoded_images.extend(strips)
+        print(f"    [🔍] +3 scan strips tumpang tindih (0-45%, 30-75%, 55-100%) dari halaman {after_idx+1}")
+    except Exception as e:
+        print(f"    [⚠️] Gagal membuat scan strips: {e}")
 
     return encoded_images, layout_type, num_full_pages
 
