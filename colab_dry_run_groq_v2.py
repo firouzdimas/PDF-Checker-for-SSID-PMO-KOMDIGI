@@ -77,7 +77,7 @@ if IN_COLAB:
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
-MAX_IMAGE_WIDTH = 1280
+MAX_IMAGE_WIDTH = 900
 
 TARGET_SITES = {
     32: {"site_id": "AM16208465011216N", "nama": "MTSN HUMBANG HASUNDUTAN"},
@@ -167,14 +167,16 @@ def get_images_from_folder(drive_service, folder_id, max_width=1280):
 
 # =================== IMAGE STRATEGY: 3 OVERLAPPING SCAN STRIPS ===================
 
-def pil_to_base64(pil_img, max_width=1200):
-    """Konversi PIL Image ke base64 PNG string."""
+def pil_to_base64(pil_img, max_width=1000):
+    """Konversi PIL Image ke base64 JPEG string (kompresi tinggi)."""
     from PIL import Image
     if pil_img.width > max_width:
         ratio = max_width / pil_img.width
         pil_img = pil_img.resize((max_width, int(pil_img.height * ratio)), Image.LANCZOS)
     buffer = io.BytesIO()
-    pil_img.save(buffer, format="PNG", optimize=True)
+    if pil_img.mode != 'RGB':
+        pil_img = pil_img.convert('RGB')
+    pil_img.save(buffer, format="JPEG", quality=65)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
@@ -190,15 +192,15 @@ def create_scan_strips(page_pil_img):
 
     # Strip 1: Atas (0% - 45%)
     strip1 = page_pil_img.crop((0, 0, w, int(h * 0.45)))
-    strips.append(pil_to_base64(strip1, max_width=1200))
+    strips.append(pil_to_base64(strip1, max_width=1000))
 
     # Strip 2: Tengah (30% - 75%)
     strip2 = page_pil_img.crop((0, int(h * 0.30), w, int(h * 0.75)))
-    strips.append(pil_to_base64(strip2, max_width=1200))
+    strips.append(pil_to_base64(strip2, max_width=1000))
 
     # Strip 3: Bawah (55% - 100%)
     strip3 = page_pil_img.crop((0, int(h * 0.55), w, h))
-    strips.append(pil_to_base64(strip3, max_width=1200))
+    strips.append(pil_to_base64(strip3, max_width=1000))
 
     return strips
 
@@ -289,13 +291,15 @@ def parse_pdf_layout_deterministically(pdf_bytes):
 
 
 def _encode_pil_image(pil_img, max_width=1280):
-    """Helper: encode PIL image ke base64 string dengan resize."""
+    """Helper: encode PIL image ke base64 JPEG string dengan resize (JPEG format untuk optimalisasi token & bandwidth)."""
     from PIL import Image
     if pil_img.width > max_width:
         ratio = max_width / pil_img.width
         pil_img = pil_img.resize((max_width, int(pil_img.height * ratio)), Image.LANCZOS)
     buffer = io.BytesIO()
-    pil_img.save(buffer, format="PNG", optimize=True)
+    if pil_img.mode != 'RGB':
+        pil_img = pil_img.convert('RGB')
+    pil_img.save(buffer, format="JPEG", quality=65)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
@@ -433,7 +437,7 @@ def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full
     for img_b64 in image_base64_list:
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{img_b64}"}
+            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
         })
 
     num_imgs = len(image_base64_list)
@@ -533,8 +537,12 @@ def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full
                         except json.JSONDecodeError:
                             return None
             return None
-        except Exception:
+        except Exception as e:
             if attempt == max_retries:
+                print(f"    [❌] Groq API Error pada percobaan terakhir: {e}")
+                if 'response' in locals() and response is not None:
+                    print(f"    [❌] Status Code: {response.status_code}")
+                    print(f"    [❌] Response Body: {response.text}")
                 return None
             time.sleep(delay)
             delay = min(delay * 2, 120)
