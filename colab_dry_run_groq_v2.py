@@ -75,26 +75,20 @@ if IN_COLAB:
         pass
 
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
-INPUT_SPREADSHEET_ID = "1SN2oIRavfRczHD7G-y96_Q2L2W7TMwJJ7PUkbKZ2Qs4"
+INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
 MAX_IMAGE_WIDTH = 1280
 
 TARGET_SITES = {
-    1: {"site_id": "AM16208491628106N", "nama": "SMP KRISTEN MURNATEN"},
-    2: {"site_id": "AM16208491648106N", "nama": "SMP NEGERI 2 ELPAPUTIH"},
-    3: {"site_id": "AM16208491658106N", "nama": "SMP NEGERI 5 SERAM BARAT"},
-    4: {"site_id": "AM16224767647606N", "nama": "KANTOR DESA SALULE'BO"},
-    5: {"site_id": "AM16224767667606N", "nama": "KANTOR DESA BUDONG-BUDONG"},
-    6: {"site_id": "AM16224767727606N", "nama": "KANTOR DESA SALUPANGKANG IV"},
-    7: {"site_id": "AM16230409498208R", "nama": "PUSKESMAS LEDE"},
-    8: {"site_id": "AM16230409628102R", "nama": "KANTOR KECAMATAN KEI KECIL TIMUR SELATAN"},
-    9: {"site_id": "AM16317787158206R", "nama": "SMA NEGERI 3 HALTIM"},
-    10: {"site_id": "AM16333466768104N", "nama": "PUSAT JAJANAN KULINER TUGU TANI"},
-    11: {"site_id": "AM16333466778104N", "nama": "PANTAI WISATA JIKUMERASA"},
-    12: {"site_id": "AM16333466798104N", "nama": "DINAS KOMUNIKASI DAN INFORMATIKA"},
-    13: {"site_id": "AM16907813638104R", "nama": "MTS MIFTAHUL KHAIR NAMLEA"},
-    14: {"site_id": "AO16208454678205N", "nama": "KANTOR CAMAT MANGOLI TIMUR"},
-    15: {"site_id": "AO16208454688205N", "nama": "KANTOR CAMAT SULA BESI BARAT"},
+    32: {"site_id": "AM16208465011216N", "nama": "MTSN HUMBANG HASUNDUTAN"},
+    35: {"site_id": "AM16208457991225N", "nama": "KANTOR KEPALA DESA SIROMBU"},
+    3: {"site_id": "AM16208461781214N", "nama": "RSUD LUKAS"},
+    16: {"site_id": "AM16208465031214N", "nama": "LEMBAGA PEMASYARAKATAN KELAS III TELUK DALAM"},
+    34: {"site_id": "AM16208461771214N", "nama": "KANTOR KEPALA DESA BOTOHILI SORAKE"},
+    40: {"site_id": "AM16208457991214N", "nama": "KANTOR DESA BAWOOTALUA"},
+    41: {"site_id": "AM16208461221214N", "nama": "KANTOR KEPALA DESA LAGUNDRI"},
+    36: {"site_id": "AM16208459311224N", "nama": "SMA NEGERI 1 LOTU"},
+    22: {"site_id": "AM16208465041221N", "nama": "MADRASAH ALIYAH NEGERI 3 PADANG LAWAS"},
 }
 
 
@@ -246,9 +240,10 @@ def parse_pdf_layout_deterministically(pdf_bytes):
                 elif "AFTER" in text and after_idx is None:
                     after_idx = idx
 
-        # Pass 3: Cari halaman traffic (mengandung "AP1" atau "TRAFFIC" atau "INBOUND")
-        for idx, text in enumerate(page_texts):
+        # Pass 3: Cari halaman traffic (mengandung "AP1" atau "TRAFFIC" atau "INBOUND") - Scan dari belakang
+        for idx in reversed(range(num_pages)):
             if idx != before_idx and idx != after_idx:
+                text = page_texts[idx]
                 if any(kw in text for kw in ["AP1", "TRAFFIC", "INBOUND", "MONITORING"]):
                     traffic_idx = idx
                     break
@@ -907,11 +902,12 @@ def run_dry_run():
         def queue_writeback(status_am_val, fail_notes_val):
             row_out_idx = find_row_output()
             if row_out_idx:
-                cells_to_update.append(gspread.Cell(row=row_out_idx, col=37, value=datetime.now().strftime("%d-%m-%Y")))
-                cells_to_update.append(gspread.Cell(row=row_out_idx, col=38, value="DEWO"))
+                date_str = datetime.now().strftime("%d-%b-%y")  # Format: 10-Jul-26
+                cells_to_update.append(gspread.Cell(row=row_out_idx, col=37, value=date_str))
+                cells_to_update.append(gspread.Cell(row=row_out_idx, col=38, value="AMEL"))
                 cells_to_update.append(gspread.Cell(row=row_out_idx, col=39, value=status_am_val))
                 cells_to_update.append(gspread.Cell(row=row_out_idx, col=40, value=fail_notes_val))
-                print(f"    [📝] Menyiapkan write-back ke baris {row_out_idx}: AK={datetime.now().strftime('%d-%m-%Y')}, AL=DEWO, AM={status_am_val}, AN={fail_notes_val[:40]}")
+                print(f"    [📝] Menyiapkan write-back ke baris {row_out_idx}: AK={date_str}, AL=AMEL, AM={status_am_val}, AN={fail_notes_val[:40]}")
             else:
                 print(f"    [⚠️] Site ID '{site_id_in}' tidak ditemukan di sheet output (Kolom H & I). Skip write-back.")
 
