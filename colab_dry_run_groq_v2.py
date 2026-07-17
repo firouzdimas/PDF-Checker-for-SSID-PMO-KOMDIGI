@@ -333,6 +333,8 @@ def pdf_to_images(pdf_bytes, max_width=1280):
     except Exception as e:
         print(f"    [⚠️] Gagal membuat scan strips: {e}")
 
+    return res
+
 
 
 
