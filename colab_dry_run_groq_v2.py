@@ -74,6 +74,9 @@ GROQ_API_KEYS = [
 # Pilih penyedia layanan AI: "gemini" atau "groq"
 PROVIDER = "gemini"
 
+# Pilih model Gemini: "gemini-2.0-flash", "gemini-1.5-flash", atau "gemini-1.5-pro"
+GEMINI_MODEL = "gemini-2.0-flash"
+
 GROQ_MODEL = "qwen/qwen3.6-27b"
 INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
@@ -492,7 +495,7 @@ def call_gemini_api(image_base64_list, prompt, api_key, max_retries=5, initial_d
         }
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
     
     delay = initial_delay
     for attempt in range(1, max_retries + 1):
@@ -783,7 +786,7 @@ def run_dry_run():
             print("\n[❌] Silakan isi GEMINI_API_KEYS di bagian Konfigurasi.")
             return
         print(f"[*] Provider: Google Gemini")
-        print(f"[*] Model: gemini-1.5-flash")
+        print(f"[*] Model: {GEMINI_MODEL}")
         sleep_time = 5.0
     else:
         for k in GROQ_API_KEYS:
