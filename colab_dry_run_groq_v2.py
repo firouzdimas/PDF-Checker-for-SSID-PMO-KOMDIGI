@@ -78,7 +78,7 @@ if IN_COLAB:
 GROQ_MODEL = "qwen/qwen3.6-27b"
 INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
-MAX_IMAGE_WIDTH = 900
+MAX_IMAGE_WIDTH = 640
 
 TARGET_SITES = {
     32: {"site_id": "AM16208465011216N", "nama": "MTSN HUMBANG HASUNDUTAN"},
@@ -168,7 +168,7 @@ def get_images_from_folder(drive_service, folder_id, max_width=1280):
 
 # =================== IMAGE STRATEGY: 3 OVERLAPPING SCAN STRIPS ===================
 
-def pil_to_base64(pil_img, max_width=1000):
+def pil_to_base64(pil_img, max_width=800):
     """Konversi PIL Image ke base64 JPEG string (kompresi tinggi)."""
     from PIL import Image
     if pil_img.width > max_width:
@@ -193,15 +193,15 @@ def create_scan_strips(page_pil_img):
 
     # Strip 1: Atas (0% - 45%)
     strip1 = page_pil_img.crop((0, 0, w, int(h * 0.45)))
-    strips.append(pil_to_base64(strip1, max_width=1000))
+    strips.append(pil_to_base64(strip1, max_width=800))
 
     # Strip 2: Tengah (30% - 75%)
     strip2 = page_pil_img.crop((0, int(h * 0.30), w, int(h * 0.75)))
-    strips.append(pil_to_base64(strip2, max_width=1000))
+    strips.append(pil_to_base64(strip2, max_width=800))
 
     # Strip 3: Bawah (55% - 100%)
     strip3 = page_pil_img.crop((0, int(h * 0.55), w, h))
-    strips.append(pil_to_base64(strip3, max_width=1000))
+    strips.append(pil_to_base64(strip3, max_width=800))
 
     return strips
 
