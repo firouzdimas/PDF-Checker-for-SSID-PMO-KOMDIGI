@@ -304,12 +304,7 @@ def _encode_pil_image(pil_img, max_width=1280):
 
 
 def pdf_to_images(pdf_bytes, max_width=1280):
-    """Konversi PDF ke list gambar base64 + 3 scan strips dari halaman After.
-    DPI=300.
-    Untuk PDF >3 halaman: hanya kirim 3 halaman terpenting (Before, After, Traffic)
-    + 3 scan strips = MAKSIMAL 6 gambar agar tidak melebihi batas Groq API.
-    Returns: (list_base64, layout_type, num_full_pages)
-    """
+    """Konversi PDF ke dictionary gambar base64."""
     from pdf2image import convert_from_bytes
     from PIL import Image
 
@@ -322,183 +317,112 @@ def pdf_to_images(pdf_bytes, max_width=1280):
           f"Traffic: {'hal.'+str(traffic_idx+1) if traffic_idx is not None else 'N/A'} | Layout: {layout_type}")
     print(f"    [🔍] Resolusi PDF: {images[after_idx].width}x{images[after_idx].height}px (DPI=300)")
 
-    # Untuk PDF ≤3 halaman: kirim semua halaman
-    # Untuk PDF >3 halaman: hanya kirim Before, After, Traffic (max 3 halaman)
-    if total_pdf_pages <= 3:
-        encoded_images = [_encode_pil_image(img, max_width) for img in images]
-        num_full_pages = len(encoded_images)
-        print(f"    [📄] Mengirim semua {num_full_pages} halaman")
-    else:
-        # Pilih hanya halaman terpenting
-        selected_indices = []
-        selected_labels = []
+    res = {
+        "layout_type": layout_type,
+        "before": _encode_pil_image(images[before_idx], max_width) if before_idx is not None else None,
+        "after": _encode_pil_image(images[after_idx], max_width) if after_idx is not None else None,
+        "traffic": _encode_pil_image(images[traffic_idx], max_width) if traffic_idx is not None else None,
+        "strips": []
+    }
 
-        if layout_type == "stacked":
-            # Before+After di 1 halaman
-            selected_indices.append(after_idx)
-            selected_labels.append(f"Before+After (hal.{after_idx+1})")
-        else:
-            # Before dan After terpisah
-            if before_idx is not None:
-                selected_indices.append(before_idx)
-                selected_labels.append(f"Before (hal.{before_idx+1})")
-            if after_idx is not None and after_idx not in selected_indices:
-                selected_indices.append(after_idx)
-                selected_labels.append(f"After (hal.{after_idx+1})")
-
-        if traffic_idx is not None and traffic_idx not in selected_indices:
-            selected_indices.append(traffic_idx)
-            selected_labels.append(f"Traffic (hal.{traffic_idx+1})")
-
-        encoded_images = [_encode_pil_image(images[i], max_width) for i in selected_indices]
-        num_full_pages = len(encoded_images)
-        print(f"    [📄] PDF >3 halaman → seleksi {num_full_pages} halaman terpenting: {', '.join(selected_labels)}")
-
-    # Tambahkan 3 scan strips dari halaman After
     try:
         strips = create_scan_strips(images[after_idx])
-        encoded_images.extend(strips)
-        print(f"    [🔍] +3 scan strips tumpang tindih (0-45%, 30-75%, 55-100%) dari halaman {after_idx+1}")
+        res["strips"] = strips
+        print(f"    [🔍] +3 scan strips tumpang tindih dari halaman {after_idx+1}")
     except Exception as e:
         print(f"    [⚠️] Gagal membuat scan strips: {e}")
 
-    return encoded_images, layout_type, num_full_pages
+
 
 
 # =================== PROMPT AI ===================
 
-ANALYSIS_PROMPT = """Anda adalah sistem QA PMO otomatis untuk memeriksa laporan perubahan SSID AP1 proyek BAKTI AKSI.
+SSID_PROMPT_TEMPLATE = """Anda adalah sistem QA PMO otomatis untuk memeriksa laporan perubahan SSID AP1 proyek BAKTI AKSI.
 
-INSTRUKSI — Periksa SEMUA poin berikut dari gambar-gambar yang dikirimkan:
+Tugas Anda adalah memeriksa dokumen/gambar yang dikirimkan:
+- Gambar 1: Halaman Before (atau Before+After jika stacked)
+- Gambar 2: Halaman After (atau strip atas jika stacked)
+- Gambar 3: Strip resolusi tinggi dari halaman After (atau strip tengah jika stacked)
 
+Harap ekstrak dan periksa poin-poin berikut:
 1. IDENTIFIKASI DOKUMEN:
    - Cari "SITE ID" dan "NAMA LOKASI" di bagian atas/header dokumen.
-
-2. CAPTURE BEFORE (biasanya gambar/halaman pertama di PDF):
-   - Apakah URL/web address bar browser terlihat?
+2. CAPTURE BEFORE:
+   - Apakah URL/web address bar browser terlihat? (web_address_before_visible: true/false)
    - Baca field "* Name" atau "Name()" → ini adalah SSID sebelum perubahan (ssid_before).
-   - Apakah nama site di capture before identik/serupa dengan NAMA LOKASI dokumen?
-
-3. CAPTURE AFTER (biasanya gambar/halaman kedua di PDF) — 🚨 PENGECEKAN UTAMA:
-   - Apakah URL/web address bar browser terlihat?
-   - Apakah nama site di capture after identik/serupa dengan NAMA LOKASI dokumen?
+   - Apakah nama site di capture sebelum identik/serupa dengan NAMA LOKASI TARGET? (nama_site_cocok_before: true/false)
+   - Tulis nama site yang terbaca di Before: (nama_site_before_terbaca: string)
+3. CAPTURE AFTER — 🚨 PENGECEKAN UTAMA:
+   - Apakah URL/web address bar browser terlihat? (web_address_after_visible: true/false)
+   - Apakah nama site di capture sesudah identik/serupa dengan NAMA LOKASI TARGET? (nama_site_cocok_after: true/false)
+   - Tulis nama site yang terbaca di After: (nama_site_after_terbaca: string)
    - Baca field "* Name" → ini adalah ssid_after.
-   - 🚨 HITUNG BAGAN "BAKTI AKSI":
-     Periksa SELURUH capture AFTER. Hitung berapa BAGAN/AREA TERPISAH yang mengandung kata "BAKTI AKSI" atau "BAKTI AKS".
-     Contoh bagan: breadcrumb/header (Wi-Fi > BAKTI AKSI...), field input * Name, judul halaman, dll.
-     GUNAKAN GAMBAR SCAN STRIP RESOLUSI TINGGI untuk membaca teks dengan presisi!
-     Isi "jumlah_bagan_bakti_aksi" (integer) dan "daftar_bagan_bakti_aksi" (list string).
-
-4. CAPTURE TRAFFIC (biasanya gambar/halaman terakhir di PDF):
-   - Apakah judul/label grafik mengandung kata "AP1"? (traffic_contains_ap1)
-   - Apakah nama site di judul grafik identik/serupa dengan NAMA LOKASI? (traffic_site_name_identik)
-   - Apakah ada PANAH penunjuk pada grafik? (traffic_panah_ada)
-   - Ekstrak tanggal dari dekat panah (traffic_tanggal_eksekusi, format DD-MM-YYYY).
-   - Apakah ada GRAFIK/data traffic SEBELUM titik panah? (traffic_grafik_before_ada)
-     → true jika ada garis/area grafik yang menunjukkan aktivitas sebelum panah.
-     → false jika grafik kosong/flatline/tidak ada data sebelum panah.
-   - Apakah ada GRAFIK/data traffic SESUDAH titik panah? (traffic_grafik_after_ada)
-     → true jika ada garis/area grafik yang menunjukkan aktivitas sesudah panah.
-     → false jika grafik kosong/flatline/tidak ada data sesudah panah.
-   - Tingkat anomali traffic: bandingkan grafik sebelum vs sesudah panah.
-     TIDAK ADA = normal, RENDAH = sedikit turun, SEDANG = drop >50%, TINGGI = mati total.
+   - 🚨 HITUNG BAGAN "BAKTI AKSI" pada Capture After:
+     Hitung berapa BAGAN/AREA TERPISAH yang mengandung kata "BAKTI AKSI" atau "BAKTI AKS" pada Capture After (gunakan strip resolusi tinggi untuk presisi).
+     Isi "jumlah_bagan_bakti_aksi" (integer) dan "daftar_bagan_bakti_aksi" (list string dari bagan yang ditemukan).
 
 WAJIB kembalikan output dalam format JSON mentah (tanpa pembungkus markdown):
 {
   "site_id": "string",
   "nama_lokasi": "string",
-  "ssid_before": "string — teks field Name pada capture Before",
-  "ssid_after": "string — teks field Name pada capture After",
-  "web_address_before_visible": true/false,
-  "web_address_after_visible": true/false,
-  "nama_site_cocok_before": true/false,
-  "nama_site_cocok_after": true/false,
-  "nama_site_cocok_traffic": true/false,
-  "nama_site_before_terbaca": "string — nama site yang terbaca di capture Before",
-  "nama_site_after_terbaca": "string — nama site yang terbaca di capture After",
-  "nama_site_traffic_terbaca": "string — nama site yang terbaca di judul grafik traffic",
+  "ssid_before": "string",
+  "ssid_after": "string",
+  "web_address_before_visible": true,
+  "web_address_after_visible": true,
+  "nama_site_cocok_before": true,
+  "nama_site_cocok_after": true,
+  "nama_site_before_terbaca": "string",
+  "nama_site_after_terbaca": "string",
   "jumlah_bagan_bakti_aksi": 0,
-  "daftar_bagan_bakti_aksi": [],
-  "traffic_contains_ap1": true/false,
-  "traffic_site_name_identik": true/false,
-  "traffic_panah_ada": true/false,
+  "daftar_bagan_bakti_aksi": []
+}"""
+
+TRAFFIC_PROMPT_TEMPLATE = """Anda adalah sistem QA PMO otomatis untuk memeriksa laporan perubahan SSID AP1 proyek BAKTI AKSI.
+
+Tugas Anda adalah memeriksa grafik monitoring traffic pada gambar yang dikirimkan.
+Harap periksa poin-poin berikut:
+1. Apakah judul/label grafik mengandung kata "AP1"? (traffic_contains_ap1: true/false)
+2. Apakah nama site di judul grafik traffic identik/serupa dengan NAMA LOKASI TARGET? (nama_site_cocok_traffic: true/false)
+3. Tulis nama site yang terbaca di judul grafik traffic: (nama_site_traffic_terbaca: string)
+4. Apakah ada PANAH penunjuk pada grafik? (traffic_panah_ada: true/false)
+5. Ekstrak tanggal eksekusi dari dekat panah: (traffic_tanggal_eksekusi: "DD-MM-YYYY")
+6. Apakah ada GRAFIK/data traffic SEBELUM titik panah? (traffic_grafik_before_ada: true/false)
+7. Apakah ada GRAFIK/data traffic SESUDAH titik panah? (traffic_grafik_after_ada: true/false)
+8. Tingkat anomali traffic (TIDAK ADA/RENDAH/SEDANG/TINGGI): (traffic_anomali_level)
+9. Berikan catatan penjelasan singkat: (catatan_ai)
+
+WAJIB kembalikan output dalam format JSON mentah (tanpa pembungkus markdown):
+{
+  "nama_site_cocok_traffic": true,
+  "nama_site_traffic_terbaca": "string",
+  "traffic_contains_ap1": true,
+  "traffic_site_name_identik": true,
+  "traffic_panah_ada": true,
   "traffic_tanggal_eksekusi": "DD-MM-YYYY",
-  "traffic_grafik_before_ada": true/false,
-  "traffic_grafik_after_ada": true/false,
+  "traffic_grafik_before_ada": true,
+  "traffic_grafik_after_ada": true,
   "traffic_anomali_level": "TIDAK ADA/RENDAH/SEDANG/TINGGI",
-  "catatan_ai": "string penjelasan singkat dari AI"
+  "catatan_ai": "string"
 }"""
 
 
-def analyze_with_groq(image_base64_list, api_key, layout_type="single", num_full_pages=2,
-                      max_retries=5, initial_delay=25, target_site_id="", target_nama=""):
-    """Kirim gambar ke Groq API dengan deskripsi struktur dinamis + konteks target."""
+def call_groq_api(image_base64_list, prompt, api_key, max_retries=5, initial_delay=25):
+    """Kirim list gambar (maksimal 3) dan prompt spesifik ke Groq API."""
     content = []
     for img_b64 in image_base64_list:
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
-        })
-
-    num_imgs = len(image_base64_list)
-    num_strips = num_imgs - num_full_pages  # biasanya 3
-
-    # ── Injeksi Konteks Target ──
-    # Mencegah AI salah membaca header proyek (misal "2024 SL BAKTI") sebagai site_id/nama_lokasi
-    target_context = ""
-    if target_site_id or target_nama:
-        target_context = (
-            f"🎯 KONTEKS TARGET — Dokumen ini untuk site berikut:\n"
-            f"   SITE ID TARGET    : {target_site_id}\n"
-            f"   NAMA LOKASI TARGET: {target_nama}\n"
-            f"   ⚠️ PENTING: Gunakan nilai di atas sebagai site_id dan nama_lokasi dalam JSON output.\n"
-            f"   Jangan keliru dengan label proyek (misal '2024 SL BAKTI') yang ada di header PDF.\n"
-            f"   Untuk field 'nama_site_cocok_*', bandingkan nama site yang TERBACA di gambar\n"
-            f"   dengan NAMA LOKASI TARGET di atas ('{target_nama}').\n"
-            f"\n{'=' * 50}\n\n"
-        )
-
-    structure_desc = f"🚨 STRUKTUR GAMBAR — Total {num_imgs} gambar:\n"
-
-    # Deskripsikan halaman penuh
-    if layout_type == "stacked":
-        if num_full_pages == 1:
-            structure_desc += "- Gambar 1: Halaman penuh (BEFORE + AFTER digabung, Before di atas, After di bawah)\n"
-        elif num_full_pages == 2:
-            structure_desc += (
-                "- Gambar 1: Halaman penuh (BEFORE + AFTER digabung dalam 1 halaman)\n"
-                "- Gambar 2: Halaman TRAFFIC MONITORING\n"
-            )
-        else:
-            for i in range(num_full_pages):
-                structure_desc += f"- Gambar {i+1}: Halaman PDF ke-{i+1}\n"
-    else:  # single / multi-page
-        page_labels = ["BEFORE", "AFTER", "TRAFFIC MONITORING"]
-        for i in range(num_full_pages):
-            label = page_labels[i] if i < len(page_labels) else f"Halaman {i+1}"
-            structure_desc += f"- Gambar {i+1}: Screenshot {label}\n"
-
-    # Deskripsikan scan strips
-    if num_strips >= 3:
-        s = num_full_pages + 1
-        structure_desc += (
-            f"- Gambar {s}: 🔍 SCAN STRIP ATAS (0-45%) — resolusi tinggi dari halaman After\n"
-            f"- Gambar {s+1}: 🔍 SCAN STRIP TENGAH (30-75%) — resolusi tinggi dari halaman After\n"
-            f"- Gambar {s+2}: 🔍 SCAN STRIP BAWAH (55-100%) — resolusi tinggi dari halaman After\n"
-            f"\n🚨 GUNAKAN SCAN STRIP (Gambar {s}-{s+2}) UNTUK MEMBACA TEKS SSID DAN BAKTI AKSI!\n"
-            f"Strip ini jauh lebih tajam dari halaman penuh. Baca teks dari sini!\n"
-        )
-
-    structure_desc += "\n" + "=" * 50 + "\n\n"
-    full_prompt = target_context + structure_desc + ANALYSIS_PROMPT
-
-    content.append({"type": "text", "text": full_prompt})
+        if img_b64:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+            })
+    content.append({"type": "text", "text": prompt})
 
     payload = {
         "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.1,
-        "max_tokens": 2048,
+        "max_tokens": 1500,
+        "response_format": {"type": "json_object"}
     }
 
     delay = initial_delay
@@ -961,12 +885,72 @@ def run_dry_run():
                 continue
 
             print(f"    [📄] PDF: '{file_name}' ({pdf_count} file)")
-            pdf_pages, detected_layout, num_full_pages = pdf_to_images(file_content, max_width=MAX_IMAGE_WIDTH)
-            print(f"    [📄] Total gambar: {len(pdf_pages)} ({num_full_pages} halaman + {len(pdf_pages)-num_full_pages} strips)")
+            pdf_data = pdf_to_images(file_content, max_width=MAX_IMAGE_WIDTH)
+            detected_layout = pdf_data["layout_type"]
 
-            result = analyze_with_groq(pdf_pages, api_key_active, layout_type=detected_layout,
-                                        num_full_pages=num_full_pages,
-                                        target_site_id=site_id_in, target_nama=target_nama)
+            # ── PERSIAPAN CALL 1: SSID & BAKTI AKSI ──
+            # Qwen membatasi maksimal 3 gambar per request.
+            # stacked: stacked_page, strip1, strip2
+            # single: before_page, after_page, strip2 (crop SSID dari page after)
+            ssid_images = []
+            if detected_layout == "stacked":
+                ssid_images = [pdf_data["after"], pdf_data["strips"][0] if pdf_data["strips"] else None, pdf_data["strips"][1] if len(pdf_data["strips"]) > 1 else None]
+            else:
+                ssid_images = [pdf_data["before"], pdf_data["after"], pdf_data["strips"][1] if len(pdf_data["strips"]) > 1 else None]
+
+            # Injeksi target context
+            target_context_ssid = (
+                f"🎯 KONTEKS TARGET — Dokumen ini untuk site berikut:\n"
+                f"   SITE ID TARGET    : {site_id_in}\n"
+                f"   NAMA LOKASI TARGET: {target_nama}\n"
+                f"   ⚠️ PENTING: Gunakan nilai di atas sebagai site_id dan nama_lokasi dalam JSON output.\n"
+                f"   Jangan keliru dengan label proyek (misal '2024 SL BAKTI') yang ada di header PDF.\n"
+                f"   Bandingkan nama site yang TERBACA di gambar dengan NAMA LOKASI TARGET di atas ('{target_nama}').\n"
+                f"\n{'=' * 50}\n\n"
+            )
+            full_ssid_prompt = target_context_ssid + SSID_PROMPT_TEMPLATE
+
+            # ── PERSIAPAN CALL 2: TRAFFIC ──
+            target_context_traffic = (
+                f"🎯 KONTEKS TARGET — Dokumen ini untuk site berikut:\n"
+                f"   SITE ID TARGET    : {site_id_in}\n"
+                f"   NAMA LOKASI TARGET: {target_nama}\n"
+                f"   ⚠️ PENTING: Bandingkan nama site yang TERBACA di judul grafik traffic dengan NAMA LOKASI TARGET di atas ('{target_nama}').\n"
+                f"\n{'=' * 50}\n\n"
+            )
+            full_traffic_prompt = target_context_traffic + TRAFFIC_PROMPT_TEMPLATE
+
+            # ── EKSEKUSI API ──
+            print(f"    [🤖] Call 1/2: Memverifikasi SSID & BAKTI AKSI...")
+            result_ssid = call_groq_api(ssid_images, full_ssid_prompt, api_key_active)
+
+            result = None
+            if result_ssid:
+                if pdf_data["traffic"]:
+                    print(f"    [🤖] Call 2/2: Memverifikasi Traffic Monitoring...")
+                    # Delay kecil 2 detik agar tidak terkena rate limit instan
+                    time.sleep(2.0)
+                    result_traffic = call_groq_api([pdf_data["traffic"]], full_traffic_prompt, api_key_active)
+                    if result_traffic:
+                        result = {**result_ssid, **result_traffic}
+                    else:
+                        print("    [❌] Call 2 (Traffic) gagal atau mengembalikan format tidak valid.")
+                else:
+                    # Fallback jika tidak ada halaman traffic
+                    print("    [⚠️] Halaman traffic tidak ditemukan di PDF. Gunakan status default NOK.")
+                    result_traffic = {
+                        "nama_site_cocok_traffic": False,
+                        "nama_site_traffic_terbaca": "-",
+                        "traffic_contains_ap1": False,
+                        "traffic_site_name_identik": False,
+                        "traffic_panah_ada": False,
+                        "traffic_tanggal_eksekusi": "-",
+                        "traffic_grafik_before_ada": False,
+                        "traffic_grafik_after_ada": False,
+                        "traffic_anomali_level": "TIDAK ADA",
+                        "catatan_ai": "Halaman traffic tidak terdeteksi pada PDF."
+                    }
+                    result = {**result_ssid, **result_traffic}
 
             if result:
                 result = apply_business_rules(result, file_name=file_name,
