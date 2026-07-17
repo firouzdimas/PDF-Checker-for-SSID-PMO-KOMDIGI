@@ -66,18 +66,9 @@ GEMINI_API_KEYS = [
     "MASUKKAN_API_KEY_GEMINI_DI_SINI",
 ]
 
-# Jika ingin tetap menggunakan Groq (Qwen/Llama), isi key di bawah ini
-GROQ_API_KEYS = [
-    "MASUKKAN_API_KEY_GROQ_DI_SINI",
-]
-
-# Pilih penyedia layanan AI: "gemini" atau "groq"
-PROVIDER = "gemini"
-
 # Pilih model Gemini: "gemini-2.0-flash", "gemini-1.5-flash", atau "gemini-1.5-pro"
 GEMINI_MODEL = "gemini-2.0-flash"
 
-GROQ_MODEL = "qwen/qwen3.6-27b"
 INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
 MAX_IMAGE_WIDTH = 640
@@ -90,15 +81,6 @@ if IN_COLAB:
         if colab_gemini and colab_gemini.strip():
             GEMINI_API_KEYS = [colab_gemini.strip()]
             print("[🔑] Gemini API Key dimuat dari Secrets Colab.")
-    except Exception:
-        pass
-
-    try:
-        from google.colab import userdata
-        colab_groq = userdata.get("GROQ_API_KEY")
-        if colab_groq and colab_groq.strip():
-            GROQ_API_KEYS = [colab_groq.strip()]
-            print("[🔑] Groq API Key dimuat dari Secrets Colab.")
     except Exception:
         pass
 
@@ -400,82 +382,8 @@ WAJIB kembalikan output dalam format JSON mentah (tanpa pembungkus markdown):
 }"""
 
 
-def call_groq_api(image_base64_list, prompt, api_key, max_retries=5, initial_delay=25):
-    """Kirim list gambar (maksimal 3) dan prompt spesifik ke Groq API."""
-    content = []
-    for img_b64 in image_base64_list:
-        if img_b64:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
-            })
-    content.append({"type": "text", "text": prompt})
-
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": content}],
-        "temperature": 0.1,
-        "max_tokens": 2000,
-        "reasoning_format": "hidden"
-    }
-
-    delay = initial_delay
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=payload, timeout=120
-            )
-            if response.status_code == 429:
-                print(f"    [!] Groq Rate limit (429). Menunggu {delay}s ({attempt}/{max_retries})...")
-                time.sleep(delay)
-                delay = min(delay * 2, 120)
-                continue
-            if response.status_code in [500, 503]:
-                print(f"    [!] Server error ({response.status_code}). Menunggu {delay}s ({attempt}/{max_retries})...")
-                time.sleep(delay)
-                delay = min(delay * 2, 120)
-                continue
-            response.raise_for_status()
-            result_json = response.json()
-            if "choices" in result_json and result_json["choices"]:
-                response_text = result_json["choices"][0]["message"]["content"]
-                
-                # Hapus blok <think>...</think> jika ada (fallback)
-                clean_response = re.sub(r'<think>[\s\S]*?</think>', '', response_text).strip()
-                
-                clean_text = clean_response
-                if clean_text.startswith("```"):
-                    clean_text = re.sub(r'^```(?:json)?\s*', '', clean_text)
-                    clean_text = re.sub(r'\s*```$', '', clean_text)
-                try:
-                    return json.loads(clean_text)
-                except json.JSONDecodeError:
-                    json_match = re.search(r'\{[\s\S]*\}', clean_response)
-                    if json_match:
-                        try:
-                            return json.loads(json_match.group())
-                        except json.JSONDecodeError as je:
-                            print(f"    [❌] Gagal parse JSON hasil regex: {je}")
-                    print(f"    [❌] Gagal parse JSON. Respons mentah dari AI:\n{response_text}")
-            else:
-                print(f"    [❌] Respons API tidak memiliki choices: {result_json}")
-            return None
-        except Exception as e:
-            if attempt == max_retries:
-                print(f"    [❌] Groq API Error pada percobaan terakhir: {e}")
-                if 'response' in locals() and response is not None:
-                    print(f"    [❌] Status Code: {response.status_code}")
-                    print(f"    [❌] Response Body: {response.text}")
-                return None
-            time.sleep(delay)
-            delay = min(delay * 2, 120)
-    return None
-
-
-def call_gemini_api(image_base64_list, prompt, api_key, max_retries=5, initial_delay=5):
-    """Kirim gambar dan prompt ke Google Gemini 1.5 Flash API menggunakan requests."""
+def call_api(image_base64_list, prompt, api_key, max_retries=5, initial_delay=5):
+    """Kirim gambar dan prompt ke Google Gemini API menggunakan requests."""
     parts = []
     for img_b64 in image_base64_list:
         if img_b64:
@@ -534,14 +442,6 @@ def call_gemini_api(image_base64_list, prompt, api_key, max_retries=5, initial_d
             time.sleep(delay)
             delay = min(delay * 2, 60)
     return None
-
-
-def call_api(image_base64_list, prompt, provider, api_key):
-    """Wrapper fungsi untuk memanggil API berdasarkan provider (gemini atau groq)."""
-    if provider.lower() == "gemini":
-        return call_gemini_api(image_base64_list, prompt, api_key)
-    else:
-        return call_groq_api(image_base64_list, prompt, api_key)
 
 
 # =================== BUSINESS RULES (6 KRITERIA) ===================
@@ -772,34 +672,22 @@ def print_result(result, file_name="", kolom_lengkap=True, kolom_kosong_list=Non
 def run_dry_run():
     total_sites = len(TARGET_SITES)
     print("=" * 70)
-    print("  SSID VALIDATOR v3.1 — COLAB EDITION (GROQ VISION)")
-    print(f"  {total_sites} Site | DPI=300 | 3 Scan Strips | 6 Kriteria Validasi")
+    print("  SSID VALIDATOR v3.1 — COLAB EDITION (GEMINI VISION)")
+    print(f"  {total_sites} Site | DPI=300 | 6 Kriteria Validasi")
     print("=" * 70)
 
     api_key_active = None
-    if PROVIDER.lower() == "gemini":
-        for k in GEMINI_API_KEYS:
-            if k and k.strip() and "MASUKKAN" not in k:
-                api_key_active = k.strip()
-                break
-        if not api_key_active:
-            print("\n[❌] Silakan isi GEMINI_API_KEYS di bagian Konfigurasi.")
-            return
-        print(f"[*] Provider: Google Gemini")
-        print(f"[*] Model: {GEMINI_MODEL}")
-        sleep_time = 5.0
-    else:
-        for k in GROQ_API_KEYS:
-            if k and k.strip() and "MASUKKAN" not in k:
-                api_key_active = k.strip()
-                break
-        if not api_key_active:
-            print("\n[❌] Silakan isi GROQ_API_KEYS di bagian Konfigurasi.")
-            return
-        print(f"[*] Provider: Groq Cloud")
-        print(f"[*] Model: {GROQ_MODEL}")
-        sleep_time = 35.0
+    for k in GEMINI_API_KEYS:
+        if k and k.strip() and "MASUKKAN" not in k:
+            api_key_active = k.strip()
+            break
+    if not api_key_active:
+        print("\n[❌] Silakan isi GEMINI_API_KEYS di bagian Konfigurasi.")
+        return
 
+    print(f"[*] Provider: Google Gemini")
+    print(f"[*] Model: {GEMINI_MODEL}")
+    sleep_time = 5.0
     print(f"[*] Delay: {sleep_time}s antar request")
 
     if IN_COLAB:
@@ -1000,7 +888,7 @@ def run_dry_run():
 
             # ── EKSEKUSI API ──
             print(f"    [🤖] Call 1/2: Memverifikasi SSID & BAKTI AKSI...")
-            result_ssid = call_api(ssid_images, full_ssid_prompt, PROVIDER, api_key_active)
+            result_ssid = call_api(ssid_images, full_ssid_prompt, api_key_active)
 
             result = None
             if result_ssid:
@@ -1008,7 +896,7 @@ def run_dry_run():
                     print(f"    [🤖] Call 2/2: Memverifikasi Traffic Monitoring...")
                     # Delay kecil 2 detik agar tidak terkena rate limit instan
                     time.sleep(2.0)
-                    result_traffic = call_api([pdf_data["traffic"]], full_traffic_prompt, PROVIDER, api_key_active)
+                    result_traffic = call_api([pdf_data["traffic"]], full_traffic_prompt, api_key_active)
                     if result_traffic:
                         result = {**result_ssid, **result_traffic}
                     else:
@@ -1058,8 +946,8 @@ def run_dry_run():
                 results_list.append(parse_to_output_dict(no_val, idx_in, site_id_in, result, tanggal_submit, kolom_lengkap, kolom_kosong_list))
                 queue_writeback(status_am, fail_notes)
             else:
-                results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "ERROR", "Groq API gagal"))
-                queue_writeback("NOK", "[ERROR: Groq API gagal menganalisis PDF]")
+                results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "ERROR", "Gemini API gagal"))
+                queue_writeback("NOK", "[ERROR: Gemini API gagal menganalisis PDF]")
 
         except Exception as e:
             traceback.print_exc()
