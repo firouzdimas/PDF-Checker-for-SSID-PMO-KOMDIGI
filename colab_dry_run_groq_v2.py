@@ -424,7 +424,6 @@ def call_groq_api(image_base64_list, prompt, api_key, max_retries=5, initial_del
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.1,
         "max_tokens": 1500,
-        "response_format": {"type": "json_object"}
     }
 
     delay = initial_delay
