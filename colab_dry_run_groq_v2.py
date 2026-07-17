@@ -134,38 +134,6 @@ def get_pdf_from_folder(drive_service, folder_id):
     return file_name, file_content, created_time, pdf_count
 
 
-def get_images_from_folder(drive_service, folder_id, max_width=1280):
-    from PIL import Image
-    mime_types = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/bmp", "image/tiff"]
-    mime_query = " or ".join([f"mimeType='{m}'" for m in mime_types])
-    query = f"'{folder_id}' in parents and ({mime_query}) and trashed=false"
-    results = drive_service.files().list(
-        q=query, fields="files(id, name, createdTime, mimeType)", orderBy="name asc"
-    ).execute()
-    files_list = results.get('files', [])
-    if not files_list:
-        return []
-    image_data_list = []
-    for f in files_list:
-        try:
-            request = drive_service.files().get_media(fileId=f['id'])
-            content = request.execute()
-            img = Image.open(io.BytesIO(content))
-            if img.mode not in ('RGB', 'L'):
-                img = img.convert('RGB')
-            if img.width > max_width:
-                ratio = max_width / img.width
-                img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG", optimize=True)
-            img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-            image_data_list.append({
-                "name": f['name'], "base64": img_base64,
-                "created": f.get('createdTime', ''), "mime": f.get('mimeType', '')
-            })
-        except Exception as e:
-            print(f"    [⚠️] Gagal memproses gambar '{f['name']}': {e}")
-    return image_data_list
 
 
 # =================== IMAGE STRATEGY: 3 OVERLAPPING SCAN STRIPS ===================
@@ -877,17 +845,9 @@ def run_dry_run():
             file_name, file_content, created_time, pdf_count = get_pdf_from_folder(drive_service, folder_id)
 
             if not file_content:
-                print(f"    [⚠️] PDF tidak ditemukan. Memeriksa keberadaan gambar terpisah...")
-                image_files = get_images_from_folder(drive_service, folder_id, max_width=MAX_IMAGE_WIDTH)
-                
-                if image_files:
-                    print("    [⚠️] Folder hanya berisi file gambar terpisah, bukan PDF. Otomatis FAIL (NOK). Skip API Groq.")
-                    results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "TIDAK SESUAI", "Laporan berupa file gambar terpisah, bukan PDF"))
-                    queue_writeback("NOK", "[FAIL: Laporan berupa file gambar terpisah, bukan PDF]")
-                else:
-                    print("    [⚠️] Folder GDrive kosong (tidak ada file PDF atau gambar). Otomatis FAIL (NOK). Skip API Groq.")
-                    results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "TIDAK SESUAI", "Tidak ada file di folder GDrive"))
-                    queue_writeback("NOK", "[FAIL: Tidak ada file di folder GDrive]")
+                print("    [⚠️] PDF tidak ditemukan di folder GDrive. Otomatis FAIL (NOK). Skip API Groq.")
+                results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "TIDAK SESUAI", "PDF laporan tidak ditemukan di folder GDrive"))
+                queue_writeback("NOK", "[FAIL: PDF laporan tidak ditemukan di GDrive]")
                 continue
 
             print(f"    [📄] PDF: '{file_name}' ({pdf_count} file)")
