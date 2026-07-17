@@ -74,7 +74,7 @@ if IN_COLAB:
     except Exception:
         pass
 
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
 MAX_IMAGE_WIDTH = 900
