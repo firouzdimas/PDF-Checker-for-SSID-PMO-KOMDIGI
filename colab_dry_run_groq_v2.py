@@ -27,6 +27,7 @@ import os
 import difflib
 import pandas as pd
 from datetime import datetime
+import traceback
 
 # Mencoba mengimpor library Google Colab
 try:
@@ -984,6 +985,7 @@ def run_dry_run():
                 queue_writeback("NOK", "[ERROR: Groq API gagal menganalisis PDF]")
 
         except Exception as e:
+            traceback.print_exc()
             results_list.append(create_result_row(no_val, idx_in, site_id_in, target_nama, "ERROR", f"Error: {str(e)}"))
             queue_writeback("NOK", f"[ERROR: {str(e)}]")
 
