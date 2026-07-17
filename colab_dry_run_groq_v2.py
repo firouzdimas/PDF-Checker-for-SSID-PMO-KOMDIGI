@@ -344,8 +344,7 @@ SSID_PROMPT_TEMPLATE = """Anda adalah sistem QA PMO otomatis untuk memeriksa lap
 
 Tugas Anda adalah memeriksa dokumen/gambar yang dikirimkan:
 - Gambar 1: Halaman Before (atau Before+After jika stacked)
-- Gambar 2: Halaman After (atau strip atas jika stacked)
-- Gambar 3: Strip resolusi tinggi dari halaman After (atau strip tengah jika stacked)
+- Gambar 2: Halaman After (jika single layout)
 
 Harap ekstrak dan periksa poin-poin berikut:
 1. IDENTIFIKASI DOKUMEN:
@@ -361,7 +360,7 @@ Harap ekstrak dan periksa poin-poin berikut:
    - Tulis nama site yang terbaca di After: (nama_site_after_terbaca: string)
    - Baca field "* Name" → ini adalah ssid_after.
    - 🚨 HITUNG BAGAN "BAKTI AKSI" pada Capture After:
-     Hitung berapa BAGAN/AREA TERPISAH yang mengandung kata "BAKTI AKSI" atau "BAKTI AKS" pada Capture After (gunakan strip resolusi tinggi untuk presisi).
+     Hitung berapa BAGAN/AREA TERPISAH yang mengandung kata "BAKTI AKSI" atau "BAKTI AKS" pada Capture After.
      Isi "jumlah_bagan_bakti_aksi" (integer) dan "daftar_bagan_bakti_aksi" (list string dari bagan yang ditemukan).
 
 WAJIB kembalikan output dalam format JSON mentah (tanpa pembungkus markdown):
@@ -897,9 +896,11 @@ def run_dry_run():
             # single: before_page, after_page, strip2 (crop SSID dari page after)
             ssid_images = []
             if detected_layout == "stacked":
-                ssid_images = [pdf_data["after"], pdf_data["strips"][0] if pdf_data["strips"] else None, pdf_data["strips"][1] if len(pdf_data["strips"]) > 1 else None]
+                # Stacked: Before dan After ada di 1 halaman yang sama. Cukup kirim 1 halaman tersebut.
+                ssid_images = [pdf_data["after"]]
             else:
-                ssid_images = [pdf_data["before"], pdf_data["after"], pdf_data["strips"][1] if len(pdf_data["strips"]) > 1 else None]
+                # Terpisah: Kirim halaman Before dan After saja (total 2 gambar)
+                ssid_images = [pdf_data["before"], pdf_data["after"]]
 
             # Injeksi target context
             target_context_ssid = (
