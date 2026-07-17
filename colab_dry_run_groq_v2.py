@@ -78,7 +78,7 @@ if IN_COLAB:
 GROQ_MODEL = "qwen/qwen3.6-27b"
 INPUT_SPREADSHEET_ID = "1KgeP2G4B6EQfX4CenmPNCqkno-1ZS8myNkgSYJopdFQ"
 OUTPUT_SPREADSHEET_ID = "1P9jqL-ukharkBa24V3qEDyT_28GutMP6Npqn0rc7i3E"
-MAX_IMAGE_WIDTH = 640
+MAX_IMAGE_WIDTH = 512
 
 TARGET_SITES = {
     30: {"site_id": "AM16208465071221N", "nama": "MTSN 4 PADANG LAWAS"},
@@ -461,8 +461,11 @@ def call_groq_api(image_base64_list, prompt, api_key, max_retries=5, initial_del
                     if json_match:
                         try:
                             return json.loads(json_match.group())
-                        except json.JSONDecodeError:
-                            return None
+                        except json.JSONDecodeError as je:
+                            print(f"    [❌] Gagal parse JSON hasil regex: {je}")
+                    print(f"    [❌] Gagal parse JSON. Respons mentah dari AI:\n{response_text}")
+            else:
+                print(f"    [❌] Respons API tidak memiliki choices: {result_json}")
             return None
         except Exception as e:
             if attempt == max_retries:
@@ -718,7 +721,7 @@ def run_dry_run():
         return
 
     print(f"[*] Model: {GROQ_MODEL}")
-    sleep_time = 25.0
+    sleep_time = 35.0
     print(f"[*] Delay: {sleep_time}s antar request")
 
     if IN_COLAB:
