@@ -393,7 +393,8 @@ def call_groq_api(image_base64_list, prompt, api_key, max_retries=5, initial_del
         "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0.1,
-        "max_tokens": 1500,
+        "max_tokens": 2000,
+        "reasoning_format": "hidden"
     }
 
     delay = initial_delay
@@ -418,14 +419,18 @@ def call_groq_api(image_base64_list, prompt, api_key, max_retries=5, initial_del
             result_json = response.json()
             if "choices" in result_json and result_json["choices"]:
                 response_text = result_json["choices"][0]["message"]["content"]
-                clean_text = response_text.strip()
+                
+                # Hapus blok <think>...</think> jika ada (fallback)
+                clean_response = re.sub(r'<think>[\s\S]*?</think>', '', response_text).strip()
+                
+                clean_text = clean_response
                 if clean_text.startswith("```"):
                     clean_text = re.sub(r'^```(?:json)?\s*', '', clean_text)
                     clean_text = re.sub(r'\s*```$', '', clean_text)
                 try:
                     return json.loads(clean_text)
                 except json.JSONDecodeError:
-                    json_match = re.search(r'\{[\s\S]*\}', response_text)
+                    json_match = re.search(r'\{[\s\S]*\}', clean_response)
                     if json_match:
                         try:
                             return json.loads(json_match.group())
